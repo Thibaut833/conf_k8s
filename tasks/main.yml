@@ -1,0 +1,165 @@
+---
+# tasks file for conf_k8s
+- name: Je configure les prérequis pour le runtime containerd
+  block:
+    - name: Je crée un fichier de conf pour charger les modules overlay br_netfilter du kernel
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s.conf
+        mode: "770"
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Je charge les modules overlay et br_netfilter de manière persistante
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: J'applique le bridge iptable via systctl
+      ansible.posix.sysctl:
+        name: "{{ item }}"
+        value: '1'
+        state: present
+        reload: true
+        sysctl_file: /etc/sysctl.d/k8s.conf
+      loop:
+        - net.bridge.bridge-nf-call-iptables
+        - net.bridge.bridge-nf-call-ip6tables
+        - net.ipv4.ip_forward
+
+- name: J'installe containerd, kubeadm, kubelet et kubectl
+  block:
+    - name: J'installe containerd
+      block:
+        - name: J'installe les dépendances
+          ansible.builtin.apt:
+            name:
+              - ca-certificates
+              - curl
+              - gnupg
+              - apt-transport-https
+              - software-properties-common
+            state: present
+            update_cache: true
+
+        - name: Je crée le folder keyrings pour docker
+          ansible.builtin.file:
+            state: directory
+            path: /etc/apt/keyrings
+            mode: "0755"
+
+        - name: J'ajoute la clé du repo docker sur apt
+          ansible.builtin.get_url:
+            url: https://download.docker.com/linux/debian/gpg
+            dest: /tmp/docker.gpg
+            mode: "a+r"
+            force: true
+
+        - name: Je vérifie la présence de docker.gpg dans le folder apt keyrings
+          ansible.builtin.stat:
+            path: "/etc/apt/keyrings/docker.gpg"
+          register: exists_dockergpg
+
+        - name: Je de-armor la clé Docker gpg
+          ansible.builtin.shell: gpg --dearmor < /tmp/docker.gpg > /etc/apt/keyrings/docker.gpg
+          when: not exists_dockergpg.stat.exists
+
+        - name: J'autorise la lecture pour tous sur la clé gpg docker
+          ansible.builtin.file:
+            path: /etc/apt/keyrings/docker.gpg
+            mode: "a+r"
+
+        - name: J'ajoute le repository docker
+          ansible.builtin.apt_repository:
+            repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
+            state: present
+            filename: docker
+
+        - name: J'installe le paquet containerd
+          ansible.builtin.apt:
+            name: containerd.io
+            state: present
+            update_cache: true
+
+    - name: J'installe les paquets kubeadm kubelet kubectl
+      block:
+        - name: J'ajoute la clé du repo Google sur apt
+          ansible.builtin.get_url:
+            url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+            dest: /tmp/kubernetes-archive-keyring.gpg
+            mode: "a+r"
+            force: true
+
+        - name: Je vérifie la présence de la clé gpg kube dans le folder apt keyrings
+          ansible.builtin.stat:
+            path: "/etc/apt/keyrings/kubernetes-archive-keyring.gpg"
+          register: exists_kubegpg
+
+        - name: Je de-armor la clé kubernetes gpg
+          ansible.builtin.shell: gpg --dearmor < /tmp/kubernetes-archive-keyring.gpg > /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+          when: not exists_kubegpg.stat.exists
+
+        - name: J'autorise la lecture pour tous sur la clé gpg kube
+          ansible.builtin.file:
+            path: /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+            mode: "a+r"
+
+        - name: J'ajoute le repository kube
+          ansible.builtin.apt_repository:
+            repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main"
+            state: present
+            filename: kubernetes
+
+        - name: J'installe les paquets kubeadm kubelet kubectl
+          ansible.builtin.apt:
+            name:
+              - kubelet
+              - kubeadm
+              - kubectl
+            state: present
+            update_cache: true
+
+        - name: Je fixe la version de kubeadm kubelet kubectl
+          ansible.builtin.dpkg_selections:
+            name: "{{ item }}"
+            selection: hold
+          loop:
+            - kubelet
+            - kubeadm
+            - kubectl
+
+- name: Je paramètre le control group driver Systemd pour containerd et kubelet (gestion des ressources)
+  block:
+    - name: Configuration containderd
+      block:
+        - name: Je check si c'est le fichier initial containerd
+          ansible.builtin.lineinfile:
+            path: /etc/containerd/config.toml
+            line: "#   Copyright 2018-2022 Docker Inc."
+            state: present
+          check_mode: true
+          register: defaultconf_containerd
+
+        - name: Je regénère la configuration par défaut containerd
+          ansible.builtin.shell:
+            cmd: containerd config default > /etc/containerd/config.toml
+          when: defaultconf_containerd is not changed
+
+        - name: J'ajoute la ligne pour le cgroup systemd dans la conf containerd
+          ansible.builtin.replace:
+            path: /etc/containerd/config.toml
+            regexp: "^(\\s*)SystemdCgroup = false$"
+            replace: "\\1SystemdCgroup = true"
+          when: defaultconf_containerd is not changed
+
+        - name: Je restart le service containerd
+          ansible.builtin.systemd:
+            name: containerd
+            state: restarted
+          when: defaultconf_containerd is not changed
+
+#    - name: Configuration kubelet
+#      url doc kube : https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/configure-cgroup-driver/#configuring-the-kubelet-cgroup-driver
