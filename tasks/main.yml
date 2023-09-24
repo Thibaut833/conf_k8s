@@ -88,7 +88,7 @@
       block:
         - name: J'ajoute la clé du repo Google sur apt
           ansible.builtin.get_url:
-            url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+            url: https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key
             dest: /tmp/kubernetes-archive-keyring.gpg
             mode: "a+r"
             force: true
@@ -109,7 +109,7 @@
 
         - name: J'ajoute le repository kube
           ansible.builtin.apt_repository:
-            repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main"
+            repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
             state: present
             filename: kubernetes
 
@@ -160,6 +160,3 @@
             name: containerd
             state: restarted
           when: defaultconf_containerd is not changed
-
-#    - name: Configuration kubelet
-#      url doc kube : https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/configure-cgroup-driver/#configuring-the-kubelet-cgroup-driver
