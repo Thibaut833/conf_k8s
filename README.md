@@ -1,4 +1,4 @@
-Base
+Conf_k8s
 =========
 
 Configuration et installations des paquets pour bootstrap un cluster kubernetes avec kubeadm.
