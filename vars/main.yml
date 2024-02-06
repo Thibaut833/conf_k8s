@@ -1,2 +1,3 @@
 ---
 # vars file for conf_k8s
+version_kub: "v1.29"
